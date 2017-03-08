@@ -55,13 +55,15 @@ class OCRoute(OpenShiftCLI):
 
     def update(self):
         '''update the object'''
-        # need to update the tls information and the service name
-        return self._replace_content(self.kind, self.config.name, self.config.data)
+        return self._replace_content(self.kind,
+                                     self.config.name,
+                                     self.config.data,
+                                     force=(self.config.host != self.route.get_host()))
 
     def needs_update(self):
         ''' verify an update is needed '''
         skip = []
-        return not Utils.check_def_equal(self.config.data, self.route.yaml_dict, skip_keys=skip, debug=True)
+        return not Utils.check_def_equal(self.config.data, self.route.yaml_dict, skip_keys=skip, debug=self.verbose)
 
     @staticmethod
     def get_cert_data(path, content):

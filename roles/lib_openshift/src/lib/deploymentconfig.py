@@ -4,7 +4,7 @@
 
 # pylint: disable=too-many-public-methods
 class DeploymentConfig(Yedit):
-    ''' Class to wrap the oc command line tools '''
+    ''' Class to model an openshift DeploymentConfig'''
     default_deployment_config = '''
 apiVersion: v1
 kind: DeploymentConfig
@@ -68,7 +68,6 @@ spec:
 
         super(DeploymentConfig, self).__init__(content=content)
 
-    # pylint: disable=no-member
     def add_env_value(self, key, value):
         ''' add key, value pair to env array '''
         rval = False
@@ -105,6 +104,18 @@ spec:
                 return True
 
         return False
+
+    def get_env_var(self, key):
+        '''return a environment variables '''
+        results = self.get(DeploymentConfig.env_path) or []
+        if not results:
+            return None
+
+        for env_var in results:
+            if env_var['name'] == key:
+                return env_var
+
+        return None
 
     def get_env_vars(self):
         '''return a environment variables '''

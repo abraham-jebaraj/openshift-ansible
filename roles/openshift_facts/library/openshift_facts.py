@@ -485,6 +485,24 @@ def set_nuage_facts_if_unset(facts):
     return facts
 
 
+def set_contiv_facts_if_unset(facts):
+    """ Set contiv facts if not already present in facts dict
+            dict: the facts dict updated with the contiv facts if
+            missing
+        Args:
+            facts (dict): existing facts
+        Returns:
+            dict: the facts dict updated with the contiv
+            facts if they were not already present
+
+    """
+    if 'common' in facts:
+        if 'use_contiv' not in facts['common']:
+            use_contiv = False
+            facts['common']['use_contiv'] = use_contiv
+    return facts
+
+
 def set_node_schedulability(facts):
     """ Set schedulable facts if not already present in facts dict
         Args:
@@ -864,7 +882,7 @@ def set_version_facts_if_unset(facts):
     if 'common' in facts:
         deployment_type = facts['common']['deployment_type']
         openshift_version = get_openshift_version(facts)
-        if openshift_version:
+        if openshift_version and openshift_version != "latest":
             version = LooseVersion(openshift_version)
             facts['common']['version'] = openshift_version
             facts['common']['short_version'] = '.'.join([str(x) for x in version.version[0:2]])
@@ -875,7 +893,7 @@ def set_version_facts_if_unset(facts):
                 version_gte_3_3_or_1_3 = version >= LooseVersion('1.3.0')
                 version_gte_3_4_or_1_4 = version >= LooseVersion('1.4.0')
                 version_gte_3_5_or_1_5 = version >= LooseVersion('1.5.0')
-                version_gte_3_6_or_1_6 = version >= LooseVersion('1.6.0')
+                version_gte_3_6_or_1_6 = version >= LooseVersion('3.6.0') or version >= LooseVersion('1.6.0')
             else:
                 version_gte_3_1_or_1_1 = version >= LooseVersion('3.0.2.905')
                 version_gte_3_1_1_or_1_1_1 = version >= LooseVersion('3.1.1')
@@ -1936,6 +1954,7 @@ class OpenShiftFacts(object):
         facts = set_project_cfg_facts_if_unset(facts)
         facts = set_flannel_facts_if_unset(facts)
         facts = set_nuage_facts_if_unset(facts)
+        facts = set_contiv_facts_if_unset(facts)
         facts = set_node_schedulability(facts)
         facts = set_selectors(facts)
         facts = set_identity_providers_if_unset(facts)
@@ -2300,14 +2319,19 @@ class OpenShiftFacts(object):
                                       protected_facts_to_overwrite)
 
         if 'docker' in new_local_facts:
-            # remove duplicate and empty strings from registry lists
+            # remove duplicate and empty strings from registry lists, preserving order
             for cat in ['additional', 'blocked', 'insecure']:
                 key = '{0}_registries'.format(cat)
                 if key in new_local_facts['docker']:
                     val = new_local_facts['docker'][key]
                     if isinstance(val, string_types):
                         val = [x.strip() for x in val.split(',')]
-                    new_local_facts['docker'][key] = list(set(val) - set(['']))
+                    seen = set()
+                    new_local_facts['docker'][key] = list()
+                    for registry in val:
+                        if registry not in seen and registry != '':
+                            seen.add(registry)
+                            new_local_facts['docker'][key].append(registry)
             # Convert legacy log_options comma sep string to a list if present:
             if 'log_options' in new_local_facts['docker'] and \
                     isinstance(new_local_facts['docker']['log_options'], string_types):

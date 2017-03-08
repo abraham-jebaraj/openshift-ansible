@@ -2,14 +2,13 @@
 - name: Update router certificates
   hosts: oo_first_master
   vars:
+  roles:
+  - lib_openshift
   tasks:
   - name: Create temp directory for kubeconfig
     command: mktemp -d /tmp/openshift-ansible-XXXXXX
     register: mktemp
     changed_when: false
-  roles:
-  - lib_openshift
-
   - name: Copy admin client config(s)
     command: >
       cp {{ openshift.common.config_base }}/master//admin.kubeconfig {{ mktemp.stdout }}/admin.kubeconfig
@@ -52,7 +51,7 @@
         name: router-certs
         namespace: default
         state: absent
-        run_once: true
+      run_once: true
 
     - name: Remove router service annotations
       command: >

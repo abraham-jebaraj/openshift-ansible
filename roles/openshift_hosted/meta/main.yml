@@ -4,7 +4,7 @@ galaxy_info:
   description: OpenShift Embedded Router
   company: Red Hat, Inc.
   license: Apache License, Version 2.0
-  min_ansible_version: 1.9
+  min_ansible_version: 2.1
   platforms:
   - name: EL
     versions:
@@ -20,6 +20,7 @@ dependencies:
 - role: openshift_serviceaccounts
   openshift_serviceaccounts_names:
   - router
+  - registry
   openshift_serviceaccounts_namespace: default
   openshift_serviceaccounts_sccs:
   - hostnetwork

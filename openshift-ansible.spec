@@ -24,7 +24,6 @@ Requires:      tar
 Requires:      openshift-ansible-docs = %{version}-%{release}
 Requires:      java-1.8.0-openjdk-headless
 Requires:      httpd-tools
-Requires:      python-ruamel-yaml
 Requires:      libselinux-python
 
 %description
@@ -66,6 +65,8 @@ cp inventory/byo/* docs/example-inventories/
 
 # openshift-ansible-playbooks install
 cp -rp playbooks %{buildroot}%{_datadir}/ansible/%{name}/
+# remove contiv plabooks
+rm -rf %{buildroot}%{_datadir}/ansible/%{name}/playbooks/adhoc/contiv
 
 # BZ1330091
 find -L %{buildroot}%{_datadir}/ansible/%{name}/playbooks -name lookup_plugins -type l -delete
@@ -73,6 +74,16 @@ find -L %{buildroot}%{_datadir}/ansible/%{name}/playbooks -name filter_plugins -
 
 # openshift-ansible-roles install
 cp -rp roles %{buildroot}%{_datadir}/ansible/%{name}/
+# remove contiv role
+rm -rf %{buildroot}%{_datadir}/ansible/%{name}/roles/contiv/*
+# openshift_master_facts symlinks filter_plugins/oo_filters.py from ansible_plugins/filter_plugins
+pushd %{buildroot}%{_datadir}/ansible/%{name}/roles/openshift_master_facts/filter_plugins
+ln -sf ../../../../../ansible_plugins/filter_plugins/oo_filters.py oo_filters.py
+popd
+# openshift_master_facts symlinks lookup_plugins/oo_option.py from ansible_plugins/lookup_plugins
+pushd %{buildroot}%{_datadir}/ansible/%{name}/roles/openshift_master_facts/lookup_plugins
+ln -sf ../../../../../ansible_plugins/lookup_plugins/oo_option.py oo_option.py
+popd
 
 # openshift-ansible-filter-plugins install
 cp -rp filter_plugins %{buildroot}%{_datadir}/ansible_plugins/

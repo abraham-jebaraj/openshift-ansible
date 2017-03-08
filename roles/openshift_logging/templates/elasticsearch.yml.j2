@@ -8,7 +8,7 @@ script:
 index:
   number_of_shards: 1
   number_of_replicas: 0
-  auto_expand_replicas: 0-3
+  auto_expand_replicas: 0-2
   unassigned.node_left.delayed_timeout: 2m
   translog:
     flush_threshold_size: 256mb
@@ -37,6 +37,11 @@ gateway:
   recover_after_time: ${RECOVER_AFTER_TIME}
 
 io.fabric8.elasticsearch.authentication.users: ["system.logging.kibana", "system.logging.fluentd", "system.logging.curator", "system.admin"]
+
+openshift.config:
+  use_common_data_model: true
+  project_index_prefix: "project"
+  time_field_name: "@timestamp"
 
 openshift.searchguard:
   keystore.path: /etc/elasticsearch/secret/admin.jks

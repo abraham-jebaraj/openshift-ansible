@@ -54,7 +54,7 @@
   tags:
   - pre_upgrade
 
-- include: ../../../../common/openshift-cluster/disable_excluder.yml
+- include: ../../../../common/openshift-cluster/upgrades/disable_excluder.yml
   tags:
   - pre_upgrade
 
@@ -90,6 +90,10 @@
   tags:
   - pre_upgrade
 
+- include: ../../../../common/openshift-cluster/upgrades/v3_5/validator.yml
+  tags:
+  - pre_upgrade
+
 - include: ../../../../common/openshift-cluster/upgrades/pre/gate_checks.yml
   tags:
   - pre_upgrade
@@ -108,4 +112,4 @@
 
 - include: ../../../../common/openshift-cluster/upgrades/post_control_plane.yml
 
-- inlcude: ../../../../common/openshift-cluster/upgrades/v3_5/storage_upgrade.yml
+- include: ../../../../common/openshift-cluster/upgrades/v3_5/storage_upgrade.yml

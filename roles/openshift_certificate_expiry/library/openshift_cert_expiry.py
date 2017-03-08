@@ -5,13 +5,30 @@
 """For details on this module see DOCUMENTATION (below)"""
 
 import datetime
+import io
 import os
 import subprocess
+import yaml
 
 from six.moves import configparser
 
-import yaml
-import OpenSSL.crypto
+from ansible.module_utils.basic import AnsibleModule
+
+try:
+    # You can comment this import out and include a 'pass' in this
+    # block if you're manually testing this module on a NON-ATOMIC
+    # HOST (or any host that just doesn't have PyOpenSSL
+    # available). That will force the `load_and_handle_cert` function
+    # to use the Fake OpenSSL classes.
+    import OpenSSL.crypto
+    HAS_OPENSSL = True
+except ImportError:
+    # Some platforms (such as RHEL Atomic) may not have the Python
+    # OpenSSL library installed. In this case we will use a manual
+    # work-around to parse each certificate.
+    #
+    # Check for 'OpenSSL.crypto' in `sys.modules` later.
+    HAS_OPENSSL = False
 
 DOCUMENTATION = '''
 ---
@@ -66,6 +83,132 @@ EXAMPLES = '''
 '''
 
 
+class FakeOpenSSLCertificate(object):
+    """This provides a rough mock of what you get from
+`OpenSSL.crypto.load_certificate()`. This is a work-around for
+platforms missing the Python OpenSSL library.
+    """
+    def __init__(self, cert_string):
+        """`cert_string` is a certificate in the form you get from running a
+.crt through 'openssl x509 -in CERT.cert -text'"""
+        self.cert_string = cert_string
+        self.serial = None
+        self.subject = None
+        self.extensions = []
+        self.not_after = None
+        self._parse_cert()
+
+    def _parse_cert(self):
+        """Manually parse the certificate line by line"""
+        self.extensions = []
+
+        PARSING_ALT_NAMES = False
+        for line in self.cert_string.split('\n'):
+            l = line.strip()
+            if PARSING_ALT_NAMES:
+                # We're parsing a 'Subject Alternative Name' line
+                self.extensions.append(
+                    FakeOpenSSLCertificateSANExtension(l))
+
+                PARSING_ALT_NAMES = False
+                continue
+
+            # parse out the bits that we can
+            if l.startswith('Serial Number:'):
+                # Serial Number: 11 (0xb)
+                # => 11
+                self.serial = int(l.split()[-2])
+
+            elif l.startswith('Not After :'):
+                # Not After : Feb  7 18:19:35 2019 GMT
+                # => strptime(str, '%b %d %H:%M:%S %Y %Z')
+                # => strftime('%Y%m%d%H%M%SZ')
+                # => 20190207181935Z
+                not_after_raw = l.partition(' : ')[-1]
+                # Last item: ('Not After', ' : ', 'Feb  7 18:19:35 2019 GMT')
+                not_after_parsed = datetime.datetime.strptime(not_after_raw, '%b %d %H:%M:%S %Y %Z')
+                self.not_after = not_after_parsed.strftime('%Y%m%d%H%M%SZ')
+
+            elif l.startswith('X509v3 Subject Alternative Name:'):
+                PARSING_ALT_NAMES = True
+                continue
+
+            elif l.startswith('Subject:'):
+                # O=system:nodes, CN=system:node:m01.example.com
+                self.subject = FakeOpenSSLCertificateSubjects(l.partition(': ')[-1])
+
+    def get_serial_number(self):
+        """Return the serial number of the cert"""
+        return self.serial
+
+    def get_subject(self):
+        """Subjects must implement get_components() and return dicts or
+tuples. An 'openssl x509 -in CERT.cert -text' with 'Subject':
+
+    Subject: Subject: O=system:nodes, CN=system:node:m01.example.com
+
+might return: [('O=system', 'nodes'), ('CN=system', 'node:m01.example.com')]
+        """
+        return self.subject
+
+    def get_extension(self, i):
+        """Extensions must implement get_short_name() and return the string
+'subjectAltName'"""
+        return self.extensions[i]
+
+    def get_extension_count(self):
+        """ get_extension_count """
+        return len(self.extensions)
+
+    def get_notAfter(self):
+        """Returns a date stamp as a string in the form
+'20180922170439Z'. strptime the result with format param:
+'%Y%m%d%H%M%SZ'."""
+        return self.not_after
+
+
+class FakeOpenSSLCertificateSANExtension(object):  # pylint: disable=too-few-public-methods
+    """Mocks what happens when `get_extension` is called on a certificate
+object"""
+
+    def __init__(self, san_string):
+        """With `san_string` as you get from:
+
+    $ openssl x509 -in certificate.crt -text
+        """
+        self.san_string = san_string
+        self.short_name = 'subjectAltName'
+
+    def get_short_name(self):
+        """Return the 'type' of this extension. It's always the same though
+because we only care about subjectAltName's"""
+        return self.short_name
+
+    def __str__(self):
+        """Return this extension and the value as a simple string"""
+        return self.san_string
+
+
+# pylint: disable=too-few-public-methods
+class FakeOpenSSLCertificateSubjects(object):
+    """Mocks what happens when `get_subject` is called on a certificate
+object"""
+
+    def __init__(self, subject_string):
+        """With `subject_string` as you get from:
+
+    $ openssl x509 -in certificate.crt -text
+        """
+        self.subjects = []
+        for s in subject_string.split(', '):
+            name, _, value = s.partition('=')
+            self.subjects.append((name, value))
+
+    def get_components(self):
+        """Returns a list of tuples"""
+        return self.subjects
+
+
 # We only need this for one thing, we don't care if it doesn't have
 # that many public methods
 #
@@ -100,7 +243,10 @@ will be returned
     return [p for p in path_list if os.path.exists(os.path.realpath(p))]
 
 
-def load_and_handle_cert(cert_string, now, base64decode=False):
+# pylint: disable=too-many-locals,too-many-branches
+#
+# TODO: Break this function down into smaller chunks
+def load_and_handle_cert(cert_string, now, base64decode=False, ans_module=None):
     """Load a certificate, split off the good parts, and return some
 useful data
 
@@ -109,20 +255,38 @@ Params:
 - `cert_string` (string) - a certificate loaded into a string object
 - `now` (datetime) - a datetime object of the time to calculate the certificate 'time_remaining' against
 - `base64decode` (bool) - run .decode('base64') on the input?
+- `ans_module` (AnsibleModule) - The AnsibleModule object for this module (so we can raise errors)
 
 Returns:
-A 3-tuple of the form: (certificate_common_name, certificate_expiry_date, certificate_time_remaining)
-
+A tuple of the form:
+    (cert_subject, cert_expiry_date, time_remaining, cert_serial_number)
     """
     if base64decode:
         _cert_string = cert_string.decode('base-64')
     else:
         _cert_string = cert_string
 
-    cert_loaded = OpenSSL.crypto.load_certificate(
-        OpenSSL.crypto.FILETYPE_PEM, _cert_string)
-
-    cert_serial = cert_loaded.get_serial_number()
+    # Disable this. We 'redefine' the type because we are working
+    # around a missing library on the target host.
+    #
+    # pylint: disable=redefined-variable-type
+    if HAS_OPENSSL:
+        # No work-around required
+        cert_loaded = OpenSSL.crypto.load_certificate(
+            OpenSSL.crypto.FILETYPE_PEM, _cert_string)
+    else:
+        # Missing library, work-around required. Run the 'openssl'
+        # command on it to decode it
+        cmd = 'openssl x509 -text'
+        try:
+            openssl_proc = subprocess.Popen(cmd.split(),
+                                            stdout=subprocess.PIPE,
+                                            stdin=subprocess.PIPE)
+        except OSError:
+            ans_module.fail_json(msg="Error: The 'OpenSSL' python library and CLI command were not found on the target host. Unable to parse any certificates. This host will not be included in generated reports.")
+        else:
+            openssl_decoded = openssl_proc.communicate(_cert_string.encode('utf-8'))[0].decode('utf-8')
+            cert_loaded = FakeOpenSSLCertificate(openssl_decoded)
 
     ######################################################################
     # Read all possible names from the cert
@@ -132,34 +296,12 @@ A 3-tuple of the form: (certificate_common_name, certificate_expiry_date, certif
 
     # To read SANs from a cert we must read the subjectAltName
     # extension from the X509 Object. What makes this more difficult
-    # is that pyOpenSSL does not give extensions as a list, nor does
-    # it provide a count of all loaded extensions.
-    #
-    # Rather, extensions are REQUESTED by index. We must iterate over
-    # all extensions until we find the one called 'subjectAltName'. If
-    # we don't find that extension we'll eventually request an
-    # extension at an index where no extension exists (IndexError is
-    # raised). When that happens we know that the cert has no SANs so
-    # we break out of the loop.
-    i = 0
-    checked_all_extensions = False
-    while not checked_all_extensions:
-        try:
-            # Read the extension at index 'i'
-            ext = cert_loaded.get_extension(i)
-        except IndexError:
-            # We tried to read an extension but it isn't there, that
-            # means we ran out of extensions to check. Abort
-            san = None
-            checked_all_extensions = True
-        else:
-            # We were able to load the extension at index 'i'
-            if ext.get_short_name() == 'subjectAltName':
-                san = ext
-                checked_all_extensions = True
-            else:
-                # Try reading the next extension
-                i += 1
+    # is that pyOpenSSL does not give extensions as an iterable
+    san = None
+    for i in range(cert_loaded.get_extension_count()):
+        ext = cert_loaded.get_extension(i)
+        if ext.get_short_name() == 'subjectAltName':
+            san = ext
 
     if san is not None:
         # The X509Extension object for subjectAltName prints as a
@@ -172,15 +314,18 @@ A 3-tuple of the form: (certificate_common_name, certificate_expiry_date, certif
     ######################################################################
 
     # Grab the expiration date
-    cert_expiry = cert_loaded.get_notAfter()
+    not_after = cert_loaded.get_notAfter()
+    # example get_notAfter() => 20180922170439Z
+    if isinstance(not_after, bytes):
+        not_after = not_after.decode('utf-8')
+
     cert_expiry_date = datetime.datetime.strptime(
-        cert_expiry,
-        # example get_notAfter() => 20180922170439Z
+        not_after,
         '%Y%m%d%H%M%SZ')
 
     time_remaining = cert_expiry_date - now
 
-    return (cert_subject, cert_expiry_date, time_remaining, cert_serial)
+    return (cert_subject, cert_expiry_date, time_remaining, cert_loaded.get_serial_number())
 
 
 def classify_cert(cert_meta, now, time_remaining, expire_window, cert_list):
@@ -287,13 +432,11 @@ an OpenShift Container Platform cluster
     )
 
     # Basic scaffolding for OpenShift specific certs
-    openshift_base_config_path = module.params['config_base']
-    openshift_master_config_path = os.path.normpath(
-        os.path.join(openshift_base_config_path, "master/master-config.yaml")
-    )
-    openshift_node_config_path = os.path.normpath(
-        os.path.join(openshift_base_config_path, "node/node-config.yaml")
-    )
+    openshift_base_config_path = os.path.realpath(module.params['config_base'])
+    openshift_master_config_path = os.path.join(openshift_base_config_path,
+                                                "master", "master-config.yaml")
+    openshift_node_config_path = os.path.join(openshift_base_config_path,
+                                              "node", "node-config.yaml")
     openshift_cert_check_paths = [
         openshift_master_config_path,
         openshift_node_config_path,
@@ -308,9 +451,7 @@ an OpenShift Container Platform cluster
     kubeconfig_paths = []
     for m_kube_config in master_kube_configs:
         kubeconfig_paths.append(
-            os.path.normpath(
-                os.path.join(openshift_base_config_path, "master/%s.kubeconfig" % m_kube_config)
-            )
+            os.path.join(openshift_base_config_path, "master", m_kube_config + ".kubeconfig")
         )
 
     # Validate some paths we have the ability to do ahead of time
@@ -359,7 +500,7 @@ an OpenShift Container Platform cluster
     ######################################################################
     for os_cert in filter_paths(openshift_cert_check_paths):
         # Open up that config file and locate the cert and CA
-        with open(os_cert, 'r') as fp:
+        with io.open(os_cert, 'r', encoding='utf-8') as fp:
             cert_meta = {}
             cfg = yaml.load(fp)
             # cert files are specified in parsed `fp` as relative to the path
@@ -374,12 +515,12 @@ an OpenShift Container Platform cluster
         # Load the certificate and the CA, parse their expiration dates into
         # datetime objects so we can manipulate them later
         for _, v in cert_meta.items():
-            with open(v, 'r') as fp:
+            with io.open(v, 'r', encoding='utf-8') as fp:
                 cert = fp.read()
                 (cert_subject,
                  cert_expiry_date,
                  time_remaining,
-                 cert_serial) = load_and_handle_cert(cert, now)
+                 cert_serial) = load_and_handle_cert(cert, now, ans_module=module)
 
                 expire_check_result = {
                     'cert_cn': cert_subject,
@@ -407,7 +548,7 @@ an OpenShift Container Platform cluster
     try:
         # Try to read the standard 'node-config.yaml' file to check if
         # this host is a node.
-        with open(openshift_node_config_path, 'r') as fp:
+        with io.open(openshift_node_config_path, 'r', encoding='utf-8') as fp:
             cfg = yaml.load(fp)
 
         # OK, the config file exists, therefore this is a
@@ -420,7 +561,7 @@ an OpenShift Container Platform cluster
         cfg_path = os.path.dirname(fp.name)
         node_kubeconfig = os.path.join(cfg_path, node_masterKubeConfig)
 
-        with open(node_kubeconfig, 'r') as fp:
+        with io.open(node_kubeconfig, 'r', encoding='utf8') as fp:
             # Read in the nodes kubeconfig file and grab the good stuff
             cfg = yaml.load(fp)
 
@@ -428,7 +569,7 @@ an OpenShift Container Platform cluster
         (cert_subject,
          cert_expiry_date,
          time_remaining,
-         cert_serial) = load_and_handle_cert(c, now, base64decode=True)
+         cert_serial) = load_and_handle_cert(c, now, base64decode=True, ans_module=module)
 
         expire_check_result = {
             'cert_cn': cert_subject,
@@ -445,7 +586,7 @@ an OpenShift Container Platform cluster
         pass
 
     for kube in filter_paths(kubeconfig_paths):
-        with open(kube, 'r') as fp:
+        with io.open(kube, 'r', encoding='utf-8') as fp:
             # TODO: Maybe consider catching exceptions here?
             cfg = yaml.load(fp)
 
@@ -458,7 +599,7 @@ an OpenShift Container Platform cluster
         (cert_subject,
          cert_expiry_date,
          time_remaining,
-         cert_serial) = load_and_handle_cert(c, now, base64decode=True)
+         cert_serial) = load_and_handle_cert(c, now, base64decode=True, ans_module=module)
 
         expire_check_result = {
             'cert_cn': cert_subject,
@@ -488,7 +629,7 @@ an OpenShift Container Platform cluster
     etcd_certs = []
     etcd_cert_params.append('dne')
     try:
-        with open('/etc/etcd/etcd.conf', 'r') as fp:
+        with io.open('/etc/etcd/etcd.conf', 'r', encoding='utf-8') as fp:
             etcd_config = configparser.ConfigParser()
             # Reason: This check is disabled because the issue was introduced
             # during a period where the pylint checks weren't enabled for this file
@@ -507,12 +648,12 @@ an OpenShift Container Platform cluster
         pass
 
     for etcd_cert in filter_paths(etcd_certs_to_check):
-        with open(etcd_cert, 'r') as fp:
+        with io.open(etcd_cert, 'r', encoding='utf-8') as fp:
             c = fp.read()
             (cert_subject,
              cert_expiry_date,
              time_remaining,
-             cert_serial) = load_and_handle_cert(c, now)
+             cert_serial) = load_and_handle_cert(c, now, ans_module=module)
 
             expire_check_result = {
                 'cert_cn': cert_subject,
@@ -529,7 +670,7 @@ an OpenShift Container Platform cluster
     # Now the embedded etcd
     ######################################################################
     try:
-        with open('/etc/origin/master/master-config.yaml', 'r') as fp:
+        with io.open('/etc/origin/master/master-config.yaml', 'r', encoding='utf-8') as fp:
             cfg = yaml.load(fp)
     except IOError:
         # Not present
@@ -551,7 +692,7 @@ an OpenShift Container Platform cluster
                 (cert_subject,
                  cert_expiry_date,
                  time_remaining,
-                 cert_serial) = load_and_handle_cert(etcd_fp.read(), now)
+                 cert_serial) = load_and_handle_cert(etcd_fp.read(), now, ans_module=module)
 
                 expire_check_result = {
                     'cert_cn': cert_subject,
@@ -597,7 +738,7 @@ an OpenShift Container Platform cluster
         (cert_subject,
          cert_expiry_date,
          time_remaining,
-         cert_serial) = load_and_handle_cert(router_c, now, base64decode=True)
+         cert_serial) = load_and_handle_cert(router_c, now, base64decode=True, ans_module=module)
 
         expire_check_result = {
             'cert_cn': cert_subject,
@@ -628,7 +769,7 @@ an OpenShift Container Platform cluster
         (cert_subject,
          cert_expiry_date,
          time_remaining,
-         cert_serial) = load_and_handle_cert(registry_c, now, base64decode=True)
+         cert_serial) = load_and_handle_cert(registry_c, now, base64decode=True, ans_module=module)
 
         expire_check_result = {
             'cert_cn': cert_subject,
@@ -696,10 +837,5 @@ an OpenShift Container Platform cluster
     )
 
 
-######################################################################
-# It's just the way we do things in Ansible. So disable this warning
-#
-# pylint: disable=wrong-import-position,import-error
-from ansible.module_utils.basic import AnsibleModule  # noqa: E402
 if __name__ == '__main__':
     main()
