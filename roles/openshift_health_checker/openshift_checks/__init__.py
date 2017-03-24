@@ -2,13 +2,14 @@
 Health checks for OpenShift clusters.
 """
 
+import operator
 import os
+
 from abc import ABCMeta, abstractmethod, abstractproperty
 from importlib import import_module
-import operator
 
-import six
-from six.moves import reduce
+from ansible.module_utils import six
+from ansible.module_utils.six.moves import reduce  # pylint: disable=import-error,redefined-builtin
 
 
 class OpenShiftCheckException(Exception):
@@ -62,7 +63,8 @@ def get_var(task_vars, *keys, **kwargs):
 
     Ansible task_vars structures are Python dicts, often mapping strings to
     other dicts. This helper makes it easier to get a nested value, raising
-    OpenShiftCheckException when a key is not found.
+    OpenShiftCheckException when a key is not found or returning a default value
+    provided as a keyword argument.
     """
     try:
         value = reduce(operator.getitem, keys, task_vars)

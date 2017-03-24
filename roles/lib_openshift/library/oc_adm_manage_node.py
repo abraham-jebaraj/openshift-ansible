@@ -54,7 +54,7 @@ from ansible.module_utils.basic import AnsibleModule
 
 DOCUMENTATION = '''
 ---
-module: oadm_manage_node
+module: oc_adm_manage_node
 short_description: Module to manage openshift nodes
 description:
   - Manage openshift nodes programmatically.
@@ -126,13 +126,13 @@ extends_documentation_fragment: []
 
 EXAMPLES = '''
 - name: oadm manage-node --schedulable=true --selector=ops_node=new
-  oadm_manage_node:
+  oc_adm_manage_node:
     selector: ops_node=new
     schedulable: True
   register: schedout
 
 - name: oadm manage-node my-k8s-node-5 --evacuate
-  oadm_manage_node:
+  oc_adm_manage_node:
     node:  my-k8s-node-5
     evacuate: True
     force: True
@@ -1050,9 +1050,9 @@ class OpenShiftCLI(object):
                 if output_type == 'json':
                     try:
                         rval['results'] = json.loads(stdout)
-                    except ValueError as err:
-                        if "No JSON object could be decoded" in err.args:
-                            err = err.args
+                    except ValueError as verr:
+                        if "No JSON object could be decoded" in verr.args:
+                            err = verr.args
                 elif output_type == 'raw':
                     rval['results'] = stdout
 
@@ -1358,17 +1358,18 @@ class OpenShiftCLIConfig(object):
     def stringify(self):
         ''' return the options hash as cli params in a string '''
         rval = []
-        for key, data in self.config_options.items():
+        for key in sorted(self.config_options.keys()):
+            data = self.config_options[key]
             if data['include'] \
                and (data['value'] or isinstance(data['value'], int)):
-                rval.append('--%s=%s' % (key.replace('_', '-'), data['value']))
+                rval.append('--{}={}'.format(key.replace('_', '-'), data['value']))
 
         return rval
 
 
 # -*- -*- -*- End included fragment: lib/base.py -*- -*- -*-
 
-# -*- -*- -*- Begin included fragment: class/oadm_manage_node.py -*- -*- -*-
+# -*- -*- -*- Begin included fragment: class/oc_adm_manage_node.py -*- -*- -*-
 
 
 class ManageNodeException(Exception):
@@ -1577,9 +1578,9 @@ class ManageNode(OpenShiftCLI):
 
         return {'changed': changed, 'results': results, 'state': "present"}
 
-# -*- -*- -*- End included fragment: class/oadm_manage_node.py -*- -*- -*-
+# -*- -*- -*- End included fragment: class/oc_adm_manage_node.py -*- -*- -*-
 
-# -*- -*- -*- Begin included fragment: ansible/oadm_manage_node.py -*- -*- -*-
+# -*- -*- -*- Begin included fragment: ansible/oc_adm_manage_node.py -*- -*- -*-
 
 
 def main():
@@ -1617,4 +1618,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-# -*- -*- -*- End included fragment: ansible/oadm_manage_node.py -*- -*- -*-
+# -*- -*- -*- End included fragment: ansible/oc_adm_manage_node.py -*- -*- -*-

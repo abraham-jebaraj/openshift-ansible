@@ -30,17 +30,17 @@ deployment_type=openshift-enterprise
 # use this to lookup the latest exact version of the container images, which is the tag actually used to configure
 # the cluster. For RPM installations we just verify the version detected in your configured repos matches this
 # release.
-openshift_release=v3.4
+openshift_release=v3.5
 
 # Specify an exact container image tag to install or configure.
 # WARNING: This value will be used for all hosts in containerized environments, even those that have another version installed.
 # This could potentially trigger an upgrade and downtime, so be careful with modifying this value after the cluster is set up.
-#openshift_image_tag=v3.2.0.46
+#openshift_image_tag=v3.5.0
 
 # Specify an exact rpm version to install or configure.
 # WARNING: This value will be used for all hosts in RPM based environments, even those that have another version installed.
 # This could potentially trigger an upgrade and downtime, so be careful with modifying this value after the cluster is set up.
-#openshift_pkg_version=-3.2.0.46
+#openshift_pkg_version=-3.5.0
 
 # Install the openshift examples
 #openshift_install_examples=true
@@ -89,6 +89,8 @@ openshift_release=v3.4
 # Skip upgrading Docker during an OpenShift upgrade, leaves the current Docker version alone.
 # docker_upgrade=False
 
+# Specify exact version of etcd to configure or upgrade to.
+# etcd_version="3.1.0"
 
 # Upgrade Hooks
 #
@@ -262,6 +264,15 @@ openshift_master_identity_providers=[{'name': 'htpasswd_auth', 'login': 'true', 
 
 # Override master servingInfo.maxRequestsInFlight
 #openshift_master_max_requests_inflight=500
+
+# Override master and node servingInfo.minTLSVersion and .cipherSuites
+# valid TLS versions are VersionTLS10, VersionTLS11, VersionTLS12
+# example cipher suites override, valid cipher suites are https://golang.org/pkg/crypto/tls/#pkg-constants
+#openshift_master_min_tls_version=VersionTLS12
+#openshift_master_cipher_suites=['TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256', '...']
+#
+#openshift_node_min_tls_version=VersionTLS12
+#openshift_node_cipher_suites=['TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256', '...']
 
 # default storage plugin dependencies to install, by default the ceph and
 # glusterfs plugin dependencies will be installed, if available.
@@ -484,6 +495,9 @@ openshift_master_identity_providers=[{'name': 'htpasswd_auth', 'login': 'true', 
 # your cloud platform use this.
 #openshift_hosted_metrics_storage_kind=dynamic
 #
+# Other Metrics Options -- Common items you may wish to reconfigure, for the complete
+# list of options please see roles/openshift_metrics/README.md
+#
 # Override metricsPublicURL in the master config for cluster metrics
 # Defaults to https://hawkular-metrics.{{openshift_master_default_subdomain}}/hawkular/metrics
 # Currently, you may only alter the hostname portion of the url, alterting the
@@ -529,15 +543,14 @@ openshift_master_identity_providers=[{'name': 'htpasswd_auth', 'login': 'true', 
 # list of options please see roles/openshift_logging/README.md
 #
 # Configure loggingPublicURL in the master config for aggregate logging, defaults
-# to https://kibana.{{ openshift_master_default_subdomain }}
-#openshift_master_logging_public_url=https://kibana.example.com
+# to kibana.{{ openshift_master_default_subdomain }}
+#openshift_hosted_logging_hostname=logging.apps.example.com
 # Configure the number of elastic search nodes, unless you're using dynamic provisioning
 # this value must be 1
 #openshift_hosted_logging_elasticsearch_cluster_size=1
-#openshift_hosted_logging_hostname=logging.apps.example.com
-# Configure the prefix and version for the deployer image
+# Configure the prefix and version for the component images
 #openshift_hosted_logging_deployer_prefix=registry.example.com:8888/openshift3/
-#openshift_hosted_logging_deployer_version=3.3.0
+#openshift_hosted_logging_deployer_version=3.5.0
 
 # Configure the multi-tenant SDN plugin (default is 'redhat/openshift-ovs-subnet')
 # os_sdn_network_plugin_name='redhat/openshift-ovs-multitenant'
@@ -632,7 +645,7 @@ openshift_master_identity_providers=[{'name': 'htpasswd_auth', 'login': 'true', 
 # Configure nodeIP in the node config
 # This is needed in cases where node traffic is desired to go over an
 # interface other than the default network interface.
-#openshift_node_set_node_ip=True
+#openshift_set_node_ip=True
 
 # Force setting of system hostname when configuring OpenShift
 # This works around issues related to installations that do not have valid dns

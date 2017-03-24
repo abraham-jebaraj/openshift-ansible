@@ -1036,9 +1036,9 @@ class OpenShiftCLI(object):
                 if output_type == 'json':
                     try:
                         rval['results'] = json.loads(stdout)
-                    except ValueError as err:
-                        if "No JSON object could be decoded" in err.args:
-                            err = err.args
+                    except ValueError as verr:
+                        if "No JSON object could be decoded" in verr.args:
+                            err = verr.args
                 elif output_type == 'raw':
                     rval['results'] = stdout
 
@@ -1344,10 +1344,11 @@ class OpenShiftCLIConfig(object):
     def stringify(self):
         ''' return the options hash as cli params in a string '''
         rval = []
-        for key, data in self.config_options.items():
+        for key in sorted(self.config_options.keys()):
+            data = self.config_options[key]
             if data['include'] \
                and (data['value'] or isinstance(data['value'], int)):
-                rval.append('--%s=%s' % (key.replace('_', '-'), data['value']))
+                rval.append('--{}={}'.format(key.replace('_', '-'), data['value']))
 
         return rval
 
@@ -1907,6 +1908,28 @@ class PolicyGroup(OpenShiftCLI):
         self.verbose = verbose
         self._rolebinding = None
         self._scc = None
+        self._cluster_policy_bindings = None
+        self._policy_bindings = None
+
+    @property
+    def policybindings(self):
+        if self._policy_bindings is None:
+            results = self._get('clusterpolicybindings', None)
+            if results['returncode'] != 0:
+                raise OpenShiftCLIError('Could not retrieve policybindings')
+            self._policy_bindings = results['results'][0]['items'][0]
+
+        return self._policy_bindings
+
+    @property
+    def clusterpolicybindings(self):
+        if self._cluster_policy_bindings is None:
+            results = self._get('clusterpolicybindings', None)
+            if results['returncode'] != 0:
+                raise OpenShiftCLIError('Could not retrieve clusterpolicybindings')
+            self._cluster_policy_bindings = results['results'][0]['items'][0]
+
+        return self._cluster_policy_bindings
 
     @property
     def role_binding(self):
@@ -1947,18 +1970,24 @@ class PolicyGroup(OpenShiftCLI):
 
     def exists_role_binding(self):
         ''' return whether role_binding exists '''
-        results = self.get()
-        if results['returncode'] == 0:
-            self.role_binding = RoleBinding(results['results'][0])
-            if self.role_binding.find_group_name(self.config.config_options['group']['value']) != None:
+        bindings = None
+        if self.config.config_options['resource_kind']['value'] == 'cluster-role':
+            bindings = self.clusterpolicybindings
+        else:
+            bindings = self.policybindings
+
+        if bindings is None:
+            return False
+
+        for binding in bindings['roleBindings']:
+            _rb = binding['roleBinding']
+            if _rb['roleRef']['name'] == self.config.config_options['name']['value'] and \
+                    _rb['groupNames'] is not None and \
+                    self.config.config_options['group']['value'] in _rb['groupNames']:
+                self.role_binding = binding
                 return True
 
-            return False
-
-        elif self.config.config_options['name']['value'] in results['stderr'] and '" not found' in results['stderr']:
-            return False
-
-        return results
+        return False
 
     def exists_scc(self):
         ''' return whether scc exists '''

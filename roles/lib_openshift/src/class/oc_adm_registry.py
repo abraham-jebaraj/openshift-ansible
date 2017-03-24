@@ -87,8 +87,8 @@ class Registry(OpenShiftCLI):
         ''' prepared_registry property '''
         if not self.__prepared_registry:
             results = self.prepare_registry()
-            if not results:
-                raise RegistryException('Could not perform registry preparation.')
+            if not results or ('returncode' in results and results['returncode'] != 0):
+                raise RegistryException('Could not perform registry preparation. {}'.format(results))
             self.__prepared_registry = results
 
         return self.__prepared_registry
@@ -119,7 +119,6 @@ class Registry(OpenShiftCLI):
 
     def exists(self):
         '''does the object exist?'''
-        self.get()
         if self.deploymentconfig and self.service:
             return True
 
@@ -146,7 +145,7 @@ class Registry(OpenShiftCLI):
         ''' prepare a registry for instantiation '''
         options = self.config.to_option_list()
 
-        cmd = ['registry', '-n', self.config.namespace]
+        cmd = ['registry']
         cmd.extend(options)
         cmd.extend(['--dry-run=True', '-o', 'json'])
 
@@ -154,8 +153,8 @@ class Registry(OpenShiftCLI):
         # probably need to parse this
         # pylint thinks results is a string
         # pylint: disable=no-member
-        if results['returncode'] != 0 and 'items' in results['results']:
-            return results
+        if results['returncode'] != 0 and 'items' not in results['results']:
+            raise RegistryException('Could not perform registry preparation. {}'.format(results))
 
         service = None
         deploymentconfig = None
@@ -180,7 +179,8 @@ class Registry(OpenShiftCLI):
             service.put('spec.portalIP', self.portal_ip)
 
         # the dry-run doesn't apply the selector correctly
-        service.put('spec.selector', self.service.get_selector())
+        if self.service:
+            service.put('spec.selector', self.service.get_selector())
 
         # need to create the service and the deploymentconfig
         service_file = Utils.create_tmp_file_from_contents('service', service.yaml_dict)

@@ -1154,9 +1154,9 @@ class OpenShiftCLI(object):
                 if output_type == 'json':
                     try:
                         rval['results'] = json.loads(stdout)
-                    except ValueError as err:
-                        if "No JSON object could be decoded" in err.args:
-                            err = err.args
+                    except ValueError as verr:
+                        if "No JSON object could be decoded" in verr.args:
+                            err = verr.args
                 elif output_type == 'raw':
                     rval['results'] = stdout
 
@@ -1462,10 +1462,11 @@ class OpenShiftCLIConfig(object):
     def stringify(self):
         ''' return the options hash as cli params in a string '''
         rval = []
-        for key, data in self.config_options.items():
+        for key in sorted(self.config_options.keys()):
+            data = self.config_options[key]
             if data['include'] \
                and (data['value'] or isinstance(data['value'], int)):
-                rval.append('--%s=%s' % (key.replace('_', '-'), data['value']))
+                rval.append('--{}={}'.format(key.replace('_', '-'), data['value']))
 
         return rval
 
@@ -2060,7 +2061,7 @@ class Service(Yedit):
 # -*- -*- -*- Begin included fragment: lib/volume.py -*- -*- -*-
 
 class Volume(object):
-    ''' Class to model an openshift volume object'''
+    ''' Class to represent an openshift volume object'''
     volume_mounts_path = {"pod": "spec.containers[0].volumeMounts",
                           "dc":  "spec.template.spec.containers[0].volumeMounts",
                           "rc":  "spec.template.spec.containers[0].volumeMounts",
@@ -2092,6 +2093,11 @@ class Volume(object):
         elif volume_type == 'hostpath':
             volume['hostPath'] = {}
             volume['hostPath']['path'] = volume_info['path']
+        elif volume_type == 'configmap':
+            volume['configMap'] = {}
+            volume['configMap']['name'] = volume_info['configmap_name']
+            volume_mount = {'mountPath': volume_info['path'],
+                            'name': volume_info['name']}
 
         return (volume, volume_mount)
 
@@ -2234,8 +2240,8 @@ class Registry(OpenShiftCLI):
         ''' prepared_registry property '''
         if not self.__prepared_registry:
             results = self.prepare_registry()
-            if not results:
-                raise RegistryException('Could not perform registry preparation.')
+            if not results or ('returncode' in results and results['returncode'] != 0):
+                raise RegistryException('Could not perform registry preparation. {}'.format(results))
             self.__prepared_registry = results
 
         return self.__prepared_registry
@@ -2266,7 +2272,6 @@ class Registry(OpenShiftCLI):
 
     def exists(self):
         '''does the object exist?'''
-        self.get()
         if self.deploymentconfig and self.service:
             return True
 
@@ -2293,7 +2298,7 @@ class Registry(OpenShiftCLI):
         ''' prepare a registry for instantiation '''
         options = self.config.to_option_list()
 
-        cmd = ['registry', '-n', self.config.namespace]
+        cmd = ['registry']
         cmd.extend(options)
         cmd.extend(['--dry-run=True', '-o', 'json'])
 
@@ -2301,8 +2306,8 @@ class Registry(OpenShiftCLI):
         # probably need to parse this
         # pylint thinks results is a string
         # pylint: disable=no-member
-        if results['returncode'] != 0 and 'items' in results['results']:
-            return results
+        if results['returncode'] != 0 and 'items' not in results['results']:
+            raise RegistryException('Could not perform registry preparation. {}'.format(results))
 
         service = None
         deploymentconfig = None
@@ -2327,7 +2332,8 @@ class Registry(OpenShiftCLI):
             service.put('spec.portalIP', self.portal_ip)
 
         # the dry-run doesn't apply the selector correctly
-        service.put('spec.selector', self.service.get_selector())
+        if self.service:
+            service.put('spec.selector', self.service.get_selector())
 
         # need to create the service and the deploymentconfig
         service_file = Utils.create_tmp_file_from_contents('service', service.yaml_dict)
